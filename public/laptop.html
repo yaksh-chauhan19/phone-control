@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Phone Control</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial; text-align: center;
+               background: #0a0a0a; color: white; padding: 20px;
+               min-height: 100vh; }
+        h1 { font-size: 28px; margin-bottom: 10px; }
+        p { color: #888; margin-bottom: 30px; }
+        input { font-size: 36px; text-align: center; padding: 15px;
+                border-radius: 12px; border: 2px solid #0088ff;
+                background: #1a1a1a; color: white; width: 220px;
+                letter-spacing: 10px; }
+        button { font-size: 20px; padding: 15px; margin-top: 20px;
+                 background: #0088ff; color: white; border: none;
+                 border-radius: 12px; cursor: pointer; width: 220px;
+                 font-weight: bold; }
+        #status { margin-top: 20px; font-size: 18px;
+                  color: #0088ff; line-height: 1.6; }
+        video { width: 380px; max-width: 95vw; border-radius: 20px;
+                margin-top: 20px; border: 2px solid #0088ff;
+                display: none; background: #111; }
+        .dot { display: inline-block; animation: blink 1s infinite; }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+    </style>
+</head>
+<body>
+    <h1>💻 Laptop Side</h1>
+    <p>Enter same passcode as phone</p>
+    <input id="passcode" type="number" placeholder="1234" maxlength="4"/>
+    <br>
+    <button onclick="connect()">Connect to Phone</button>
+    <div id="status"></div>
+    <video id="phoneScreen" autoplay playsinline></video>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
+    <script>
+        const socket = io();
+        let peer;
+
+        function connect() {
+            const passcode = document.getElementById('passcode').value;
+            const status = document.getElementById('status');
+
+            if (!passcode || passcode.length < 4) {
+                status.textContent = '⚠️ Enter a 4-digit passcode!';
+                return;
+            }
+
+            socket.emit('laptop-join', passcode);
+            status.innerHTML = '🔍 Looking for phone<span class="dot">...</span>';
+
+            socket.on('error', (msg) => {
+                status.textContent = '❌ ' + msg;
+            });
+
+            socket.on('start-connection', () => {
+                status.textContent = '🔗 Phone found! Connecting...';
+
+                peer = new SimplePeer({
+                    initiator: false,
+                    trickle: false
+                });
+
+                peer.on('signal', data => {
+                    socket.emit('signal', { passcode, data });
+                });
+
+                socket.on('signal', data => {
+                    peer.signal(data);
+                });
+
+                peer.on('stream', stream => {
+                    status.textContent = '✅ Phone screen is live!';
+                    const video = document.getElementById('phoneScreen');
+                    video.style.display = 'block';
+                    video.srcObject = stream;
+                });
+
+                peer.on('error', err => {
+                    status.textContent = '❌ Error: ' + err.message;
+                });
+            });
+
+            socket.on('peer-disconnected', () => {
+                status.textContent = '📵 Phone disconnected!';
+                document.getElementById('phoneScreen').style.display = 'none';
+                if (peer) peer.destroy();
+            });
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Phone Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial; text-align: center;
+               background: #0a0a0a; color: white; padding: 40px 20px;
+               min-height: 100vh; }
+        h1 { font-size: 28px; margin-bottom: 10px; }
+        p { color: #888; margin-bottom: 30px; }
+        input { font-size: 36px; text-align: center; padding: 15px;
+                border-radius: 12px; border: 2px solid #00ff88;
+                background: #1a1a1a; color: white; width: 220px;
+                letter-spacing: 10px; }
+        button { font-size: 20px; padding: 15px;
+                 margin-top: 20px; background: #00ff88;
+                 color: black; border: none; border-radius: 12px;
+                 cursor: pointer; width: 220px; font-weight: bold; }
+        #status { margin-top: 30px; font-size: 18px;
+                  color: #00ff88; line-height: 1.6; }
+        .dot { display: inline-block; animation: blink 1s infinite; }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+    </style>
+</head>
+<body>
+    <h1>📱 Phone Side</h1>
+    <p>Enter passcode to share your screen</p>
+    <input id="passcode" type="number" placeholder="1234" maxlength="4"/>
+    <br>
+    <button onclick="connect()">Start Sharing</button>
+    <div id="status"></div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
+    <script>
+        const socket = io();
+        let peer;
+
+        async function connect() {
+            const passcode = document.getElementById('passcode').value;
+            const status = document.getElementById('status');
+
+            if (!passcode || passcode.length < 4) {
+                status.textContent = '⚠️ Enter a 4-digit passcode!';
+                return;
+            }
+
+            status.innerHTML = '🎥 Starting screen capture<span class="dot">...</span>';
+
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getDisplayMedia({
+                    video: { frameRate: 30 },
+                    audio: false
+                });
+            } catch(e) {
+                status.textContent = '❌ Screen capture was denied! Please allow it.';
+                return;
+            }
+
+            socket.emit('phone-join', passcode);
+            status.innerHTML = '📡 Waiting for laptop to connect<span class="dot">...</span>';
+
+            socket.on('start-connection', () => {
+                status.textContent = '🔗 Laptop found! Setting up stream...';
+
+                peer = new SimplePeer({
+                    initiator: true,
+                    stream: stream,
+                    trickle: false
+                });
+
+                peer.on('signal', data => {
+                    socket.emit('signal', { passcode, data });
+                });
+
+                socket.on('signal', data => {
+                    peer.signal(data);
+                });
+
+                peer.on('connect', () => {
+                    status.textContent = '✅ Connected! Laptop can see your screen!';
+                });
+
+                peer.on('error', err => {
+                    status.textContent = '❌ Error: ' + err.message;
+                });
+            });
+
+            socket.on('peer-disconnected', () => {
+                status.textContent = '📵 Laptop disconnected!';
+                if (peer) peer.destroy();
+            });
+        }
+    </script>
+</body>
+</html>
