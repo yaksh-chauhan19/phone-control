@@ -31,24 +31,26 @@
     <br>
     <button onclick="connect()">Start Sharing</button>
     <div id="status"></div>
-
     <script src="/socket.io/socket.io.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
     <script>
         const socket = io();
-        let peer;
+        let pc;
+
+        const iceConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+            ]
+        };
 
         async function connect() {
             const passcode = document.getElementById('passcode').value;
             const status = document.getElementById('status');
-
             if (!passcode || passcode.length < 4) {
                 status.textContent = '⚠️ Enter a 4-digit passcode!';
                 return;
             }
-
             status.innerHTML = '🎥 Starting screen capture<span class="dot">...</span>';
-
             let stream;
             try {
                 stream = await navigator.mediaDevices.getDisplayMedia({
@@ -63,35 +65,56 @@
             socket.emit('phone-join', passcode);
             status.innerHTML = '📡 Waiting for laptop to connect<span class="dot">...</span>';
 
-            socket.on('start-connection', () => {
+            socket.on('start-connection', async () => {
                 status.textContent = '🔗 Laptop found! Setting up stream...';
 
-                peer = new SimplePeer({
-                    initiator: true,
-                    stream: stream,
-                    trickle: false
-                });
+                pc = new RTCPeerConnection(iceConfig);
 
-                peer.on('signal', data => {
-                    socket.emit('signal', { passcode, data });
-                });
+                // Add screen stream tracks
+                stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-                socket.on('signal', data => {
-                    peer.signal(data);
-                });
+                // Send ICE candidates to laptop
+                pc.onicecandidate = (e) => {
+                    if (e.candidate) {
+                        socket.emit('signal', { passcode, data: { type: 'candidate', candidate: e.candidate }});
+                    }
+                };
 
-                peer.on('connect', () => {
-                    status.textContent = '✅ Connected! Laptop can see your screen!';
-                });
+                pc.onconnectionstatechange = () => {
+                    if (pc.connectionState === 'connected') {
+                        status.textContent = '✅ Connected! Laptop can see your screen!';
+                    } else if (pc.connectionState === 'failed') {
+                        status.textContent = '❌ Connection failed. Try again.';
+                    }
+                };
 
-                peer.on('error', err => {
-                    status.textContent = '❌ Error: ' + err.message;
-                });
+                // Create and send offer
+                try {
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+                    socket.emit('signal', { passcode, data: { type: 'offer', sdp: pc.localDescription }});
+                } catch(e) {
+                    status.textContent = '❌ Error: ' + e.message;
+                }
+            });
+
+            // Handle answer and ICE from laptop
+            socket.on('signal', async (data) => {
+                if (!pc) return;
+                try {
+                    if (data.type === 'answer') {
+                        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                    } else if (data.type === 'candidate') {
+                        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    }
+                } catch(e) {
+                    status.textContent = '❌ Signal error: ' + e.message;
+                }
             });
 
             socket.on('peer-disconnected', () => {
                 status.textContent = '📵 Laptop disconnected!';
-                if (peer) peer.destroy();
+                if (pc) pc.close();
             });
         }
     </script>

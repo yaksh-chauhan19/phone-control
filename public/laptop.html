@@ -34,17 +34,21 @@
     <button onclick="connect()">Connect to Phone</button>
     <div id="status"></div>
     <video id="phoneScreen" autoplay playsinline></video>
-
     <script src="/socket.io/socket.io.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/simple-peer/9.11.1/simplepeer.min.js"></script>
     <script>
         const socket = io();
-        let peer;
+        let pc;
+
+        const iceConfig = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+            ]
+        };
 
         function connect() {
             const passcode = document.getElementById('passcode').value;
             const status = document.getElementById('status');
-
             if (!passcode || passcode.length < 4) {
                 status.textContent = '⚠️ Enter a 4-digit passcode!';
                 return;
@@ -60,41 +64,52 @@
             socket.on('start-connection', () => {
                 status.textContent = '🔗 Phone found! Connecting...';
 
-              peer = new SimplePeer({ 
-    initiator: false,
-    trickle: true,
-    config: {
-        iceServers: [
-            { urls: 'stun:stun.l.google.com:19302' },
-            { urls: 'stun:stun1.l.google.com:19302' }
-        ]
-    }
-});
+                pc = new RTCPeerConnection(iceConfig);
 
-                peer.on('signal', data => {
-                    socket.emit('signal', { passcode, data });
-                });
+                // Send ICE candidates to phone
+                pc.onicecandidate = (e) => {
+                    if (e.candidate) {
+                        socket.emit('signal', { passcode, data: { type: 'candidate', candidate: e.candidate }});
+                    }
+                };
 
-                socket.on('signal', data => {
-                    peer.signal(data);
-                });
-
-                peer.on('stream', stream => {
+                // Show phone screen when stream arrives
+                pc.ontrack = (e) => {
                     status.textContent = '✅ Phone screen is live!';
                     const video = document.getElementById('phoneScreen');
                     video.style.display = 'block';
-                    video.srcObject = stream;
-                });
+                    video.srcObject = e.streams[0];
+                };
 
-                peer.on('error', err => {
-                    status.textContent = '❌ Error: ' + err.message;
-                });
+                pc.onconnectionstatechange = () => {
+                    if (pc.connectionState === 'failed') {
+                        status.textContent = '❌ Connection failed. Try again.';
+                    }
+                };
+            });
+
+            // Handle offer and ICE from phone
+            socket.on('signal', async (data) => {
+                if (!pc) return;
+                try {
+                    if (data.type === 'offer') {
+                        await pc.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                        const answer = await pc.createAnswer();
+                        await pc.setLocalDescription(answer);
+                        socket.emit('signal', { passcode, data: { type: 'answer', sdp: pc.localDescription }});
+                        status.textContent = '📤 Answer sent! Waiting for stream...';
+                    } else if (data.type === 'candidate') {
+                        await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+                    }
+                } catch(e) {
+                    status.textContent = '❌ Error: ' + e.message;
+                }
             });
 
             socket.on('peer-disconnected', () => {
                 status.textContent = '📵 Phone disconnected!';
                 document.getElementById('phoneScreen').style.display = 'none';
-                if (peer) peer.destroy();
+                if (pc) pc.close();
             });
         }
     </script>
